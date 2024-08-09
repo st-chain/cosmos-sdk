@@ -12,6 +12,7 @@ import (
 	"cosmossdk.io/core/gas"
 	"cosmossdk.io/core/header"
 	"cosmossdk.io/core/log"
+	"cosmossdk.io/core/router"
 	"cosmossdk.io/core/store"
 	"cosmossdk.io/core/transaction"
 	stfgas "cosmossdk.io/server/v2/stf/gas"
@@ -23,9 +24,10 @@ var Identity = []byte("stf")
 
 // STF is a struct that manages the state transition component of the app.
 type STF[T transaction.Tx] struct {
-	logger      log.Logger
-	handleMsg   func(ctx context.Context, msg transaction.Msg) (transaction.Msg, error)
-	handleQuery func(ctx context.Context, req transaction.Msg) (transaction.Msg, error)
+	logger log.Logger
+
+	msgRouter   coreRouterImpl
+	queryRouter coreRouterImpl
 
 	doPreBlock        func(ctx context.Context, txs []T) error
 	doBeginBlock      func(ctx context.Context) error
@@ -42,8 +44,9 @@ type STF[T transaction.Tx] struct {
 
 // NewSTF returns a new STF instance.
 func NewSTF[T transaction.Tx](
-	handleMsg func(ctx context.Context, msg transaction.Msg) (transaction.Msg, error),
-	handleQuery func(ctx context.Context, req transaction.Msg) (transaction.Msg, error),
+	logger log.Logger,
+	msgRouterBuilder *MsgRouterBuilder,
+	queryRouterBuilder *MsgRouterBuilder,
 	doPreBlock func(ctx context.Context, txs []T) error,
 	doBeginBlock func(ctx context.Context) error,
 	doEndBlock func(ctx context.Context) error,
@@ -51,20 +54,30 @@ func NewSTF[T transaction.Tx](
 	doValidatorUpdate func(ctx context.Context) ([]appmodulev2.ValidatorUpdate, error),
 	postTxExec func(ctx context.Context, tx T, success bool) error,
 	branch func(store store.ReaderMap) store.WriterMap,
-) *STF[T] {
+) (*STF[T], error) {
+	msgRouter, err := msgRouterBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("build msg router: %w", err)
+	}
+	queryRouter, err := queryRouterBuilder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("build query router: %w", err)
+	}
+
 	return &STF[T]{
-		handleMsg:           handleMsg,
-		handleQuery:         handleQuery,
+		logger:              logger,
+		msgRouter:           msgRouter,
+		queryRouter:         queryRouter,
 		doPreBlock:          doPreBlock,
 		doBeginBlock:        doBeginBlock,
 		doEndBlock:          doEndBlock,
-		doTxValidation:      doTxValidation,
 		doValidatorUpdate:   doValidatorUpdate,
+		doTxValidation:      doTxValidation,
 		postTxExec:          postTxExec, // TODO
 		branchFn:            branch,
 		makeGasMeter:        stfgas.DefaultGasMeter,
 		makeGasMeteredState: stfgas.DefaultWrapWithGasMeter,
-	}
+	}, nil
 }
 
 // DeliverBlock is our state transition function.
@@ -136,7 +149,7 @@ func (s STF[T]) DeliverBlock(
 		if err = isCtxCancelled(ctx); err != nil {
 			return nil, nil, err
 		}
-		txResults[i] = s.deliverTx(ctx, newState, txBytes, transaction.ExecModeFinalize, hi)
+		txResults[i] = s.deliverTx(exCtx, newState, txBytes, transaction.ExecModeFinalize, hi)
 	}
 	// reset events
 	exCtx.events = make([]event.Event, 0)
@@ -187,7 +200,7 @@ func (s STF[T]) deliverTx(
 		}
 	}
 
-	validateGas, validationEvents, err := s.validateTx(ctx, state, gasLimit, tx)
+	validateGas, validationEvents, err := s.validateTx(ctx, state, gasLimit, tx, execMode)
 	if err != nil {
 		return appmanager.TxResult{
 			Error: err,
@@ -211,13 +224,14 @@ func (s STF[T]) validateTx(
 	state store.WriterMap,
 	gasLimit uint64,
 	tx T,
+	execMode transaction.ExecMode,
 ) (gasUsed uint64, events []event.Event, err error) {
 	validateState := s.branchFn(state)
 	hi, err := s.getHeaderInfo(validateState)
 	if err != nil {
 		return 0, nil, err
 	}
-	validateCtx := s.makeContext(ctx, appmanager.RuntimeIdentity, validateState, transaction.ExecModeCheck)
+	validateCtx := s.makeContext(ctx, appmanager.RuntimeIdentity, validateState, execMode)
 	validateCtx.setHeaderInfo(hi)
 	validateCtx.setGasLimit(gasLimit)
 	err = s.doTxValidation(validateCtx, tx)
@@ -248,8 +262,6 @@ func (s STF[T]) execTx(
 		postTxState := s.branchFn(state)
 		postTxCtx := s.makeContext(ctx, appmanager.RuntimeIdentity, postTxState, execMode)
 		postTxCtx.setHeaderInfo(hi)
-
-		// TODO: runtime sets a noop posttxexec if the app doesnt set anything (julien)
 
 		postTxErr := s.postTxExec(postTxCtx, tx, false)
 		if postTxErr != nil {
@@ -310,7 +322,7 @@ func (s STF[T]) runTxMsgs(
 	execCtx.setGasLimit(gasLimit)
 	for i, msg := range msgs {
 		execCtx.sender = txSenders[i]
-		resp, err := s.handleMsg(execCtx, msg)
+		resp, err := s.msgRouter.InvokeUntyped(execCtx, msg)
 		if err != nil {
 			return nil, 0, nil, fmt.Errorf("message execution at index %d failed: %w", i, err)
 		}
@@ -346,7 +358,7 @@ func (s STF[T]) runConsensusMessages(
 ) ([]transaction.Msg, error) {
 	responses := make([]transaction.Msg, len(messages))
 	for i := range messages {
-		resp, err := s.handleMsg(ctx, messages[i])
+		resp, err := s.msgRouter.InvokeUntyped(ctx, messages[i])
 		if err != nil {
 			return nil, err
 		}
@@ -410,45 +422,6 @@ func (s STF[T]) validatorUpdates(
 	return ctx.events, valSetUpdates, nil
 }
 
-const headerInfoPrefix = 0x37
-
-// setHeaderInfo sets the header info in the state to be used by queries in the future.
-func (s STF[T]) setHeaderInfo(state store.WriterMap, headerInfo header.Info) error {
-	// TODO storing header info is too low level here, stf should be stateless.
-	// We should have a keeper that does this.
-	runtimeStore, err := state.GetWriter(Identity)
-	if err != nil {
-		return err
-	}
-	bz, err := headerInfo.Bytes()
-	if err != nil {
-		return err
-	}
-	err = runtimeStore.Set([]byte{headerInfoPrefix}, bz)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// getHeaderInfo gets the header info from the state. It should only be used for queries
-func (s STF[T]) getHeaderInfo(state store.WriterMap) (i header.Info, err error) {
-	runtimeStore, err := state.GetWriter(Identity)
-	if err != nil {
-		return header.Info{}, err
-	}
-	v, err := runtimeStore.Get([]byte{headerInfoPrefix})
-	if err != nil {
-		return header.Info{}, err
-	}
-	if v == nil {
-		return header.Info{}, nil
-	}
-
-	err = i.FromBytes(v)
-	return i, err
-}
-
 // Simulate simulates the execution of a tx on the provided state.
 func (s STF[T]) Simulate(
 	ctx context.Context,
@@ -475,7 +448,7 @@ func (s STF[T]) ValidateTx(
 	tx T,
 ) appmanager.TxResult {
 	validationState := s.branchFn(state)
-	gasUsed, events, err := s.validateTx(ctx, validationState, gasLimit, tx)
+	gasUsed, events, err := s.validateTx(ctx, validationState, gasLimit, tx, transaction.ExecModeCheck)
 	return appmanager.TxResult{
 		Events:  events,
 		GasUsed: gasUsed,
@@ -498,11 +471,7 @@ func (s STF[T]) Query(
 	queryCtx := s.makeContext(ctx, nil, queryState, internal.ExecModeSimulate)
 	queryCtx.setHeaderInfo(hi)
 	queryCtx.setGasLimit(gasLimit)
-	return s.handleQuery(queryCtx, req)
-}
-
-func (s STF[T]) Message(ctx context.Context, msg transaction.Msg) (response transaction.Msg, err error) {
-	return s.handleMsg(ctx, msg)
+	return s.queryRouter.InvokeUntyped(queryCtx, req)
 }
 
 // RunWithCtx is made to support genesis, if genesis was just the execution of messages instead
@@ -521,8 +490,9 @@ func (s STF[T]) RunWithCtx(
 // clone clones STF.
 func (s STF[T]) clone() STF[T] {
 	return STF[T]{
-		handleMsg:           s.handleMsg,
-		handleQuery:         s.handleQuery,
+		logger:              s.logger,
+		msgRouter:           s.msgRouter,
+		queryRouter:         s.queryRouter,
 		doPreBlock:          s.doPreBlock,
 		doBeginBlock:        s.doBeginBlock,
 		doEndBlock:          s.doEndBlock,
@@ -558,6 +528,9 @@ type executionContext struct {
 	branchFn            branchFn
 	makeGasMeter        makeGasMeterFn
 	makeGasMeteredStore makeGasMeteredStateFn
+
+	msgRouter   router.Service
+	queryRouter router.Service
 }
 
 // setHeaderInfo sets the header info in the state to be used by queries in the future.
@@ -592,24 +565,28 @@ func (s STF[T]) makeContext(
 ) *executionContext {
 	valuedCtx := context.WithValue(ctx, corecontext.ExecModeKey, execMode)
 	return newExecutionContext(
+		valuedCtx,
 		s.makeGasMeter,
 		s.makeGasMeteredState,
 		s.branchFn,
-		valuedCtx,
 		sender,
 		store,
 		execMode,
+		s.msgRouter,
+		s.queryRouter,
 	)
 }
 
 func newExecutionContext(
+	ctx context.Context,
 	makeGasMeterFn makeGasMeterFn,
 	makeGasMeteredStoreFn makeGasMeteredStateFn,
 	branchFn branchFn,
-	ctx context.Context,
 	sender transaction.Identity,
 	state store.WriterMap,
 	execMode transaction.ExecMode,
+	msgRouter coreRouterImpl,
+	queryRouter coreRouterImpl,
 ) *executionContext {
 	meter := makeGasMeterFn(gas.NoGasLimit)
 	meteredState := makeGasMeteredStoreFn(meter, state)
@@ -626,6 +603,8 @@ func newExecutionContext(
 		branchFn:            branchFn,
 		makeGasMeter:        makeGasMeterFn,
 		makeGasMeteredStore: makeGasMeteredStoreFn,
+		msgRouter:           msgRouter,
+		queryRouter:         queryRouter,
 	}
 }
 

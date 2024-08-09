@@ -1,13 +1,14 @@
 package stf
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"slices"
 
+	"github.com/cosmos/gogoproto/jsonpb"
 	gogoproto "github.com/cosmos/gogoproto/proto"
 	"golang.org/x/exp/maps"
-	"google.golang.org/protobuf/runtime/protoiface"
 
 	"cosmossdk.io/core/event"
 )
@@ -31,7 +32,7 @@ type eventManager struct {
 
 // Emit emits an typed event that is defined in the protobuf file.
 // In the future these events will be added to consensus.
-func (em *eventManager) Emit(tev protoiface.MessageV1) error {
+func (em *eventManager) Emit(tev gogoproto.Message) error {
 	res, err := TypedEventToEvent(tev)
 	if err != nil {
 		return err
@@ -49,21 +50,21 @@ func (em *eventManager) EmitKV(eventType string, attrs ...event.Attribute) error
 
 // EmitNonConsensus emits an typed event that is defined in the protobuf file.
 // These events will not be added to consensus.
-func (em *eventManager) EmitNonConsensus(event protoiface.MessageV1) error {
+func (em *eventManager) EmitNonConsensus(event gogoproto.Message) error {
 	return em.Emit(event)
 }
 
 // TypedEventToEvent takes typed event and converts to Event object
 func TypedEventToEvent(tev gogoproto.Message) (event.Event, error) {
 	evtType := gogoproto.MessageName(tev)
-	evtJSON, err := gogoproto.Marshal(tev)
-	if err != nil {
+	buf := new(bytes.Buffer)
+	jm := &jsonpb.Marshaler{OrigName: true, EmitDefaults: true, AnyResolver: nil}
+	if err := jm.Marshal(buf, tev); err != nil {
 		return event.Event{}, err
 	}
 
 	var attrMap map[string]json.RawMessage
-	err = json.Unmarshal(evtJSON, &attrMap)
-	if err != nil {
+	if err := json.Unmarshal(buf.Bytes(), &attrMap); err != nil {
 		return event.Event{}, err
 	}
 
