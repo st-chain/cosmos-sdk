@@ -142,6 +142,14 @@ message Validator {
     (gogoproto.customtype) = "github.com/cosmos/cosmos-sdk/types.Int",
     (gogoproto.nullable)   = false
   ];
+  // count meid amount
+  string meid_amount = 15 [
+    (cosmos_proto.scalar)  = "cosmos.Int",
+    (gogoproto.customtype) = "github.com/cosmos/cosmos-sdk/types.Int",
+    (gogoproto.nullable)   = false
+  ];
+  // owner_address defines the address of distribute gas income
+  string owner_address = 16 [(cosmos_proto.scalar) = "cosmos.AddressString"];
 }
 
 // BondStatus is the status of a validator.
