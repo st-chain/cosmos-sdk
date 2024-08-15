@@ -137,7 +137,7 @@ func NewMsgEditValidator(valAddr sdk.ValAddress, description Description, newRat
 	return &MsgEditValidator{
 		Description:       description,
 		CommissionRate:    newRate,
-		ValidatorAddress:  valAddr.String(),
+		StakerAddress:     valAddr.String(),
 		MinSelfDelegation: newMinSelfDelegation,
 	}
 }
@@ -150,8 +150,8 @@ func (msg MsgEditValidator) Type() string { return TypeMsgEditValidator }
 
 // GetSigners implements the sdk.Msg interface.
 func (msg MsgEditValidator) GetSigners() []sdk.AccAddress {
-	valAddr, _ := sdk.ValAddressFromBech32(msg.ValidatorAddress)
-	return []sdk.AccAddress{sdk.AccAddress(valAddr)}
+	addr, _ := sdk.AccAddressFromBech32(msg.StakerAddress)
+	return []sdk.AccAddress{sdk.AccAddress(addr)}
 }
 
 // GetSignBytes implements the sdk.Msg interface.
@@ -162,7 +162,7 @@ func (msg MsgEditValidator) GetSignBytes() []byte {
 
 // ValidateBasic implements the sdk.Msg interface.
 func (msg MsgEditValidator) ValidateBasic() error {
-	if _, err := sdk.ValAddressFromBech32(msg.ValidatorAddress); err != nil {
+	if _, err := sdk.AccAddressFromBech32(msg.StakerAddress); err != nil {
 		return sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
 	}
 
