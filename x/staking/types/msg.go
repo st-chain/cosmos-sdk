@@ -220,9 +220,9 @@ func (msg MsgDelegate) ValidateBasic() error {
 	if _, err := sdk.AccAddressFromBech32(msg.DelegatorAddress); err != nil {
 		return sdkerrors.ErrInvalidAddress.Wrapf("invalid delegator address: %s", err)
 	}
-	if _, err := sdk.ValAddressFromBech32(msg.ValidatorAddress); err != nil {
-		return sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
-	}
+	//if _, err := sdk.ValAddressFromBech32(msg.ValidatorAddress); err != nil {
+	//	return sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
+	//}
 
 	if !msg.Amount.IsValid() || !msg.Amount.Amount.IsPositive() {
 		return sdkerrors.Wrap(
@@ -322,9 +322,9 @@ func (msg MsgUndelegate) ValidateBasic() error {
 	if _, err := sdk.AccAddressFromBech32(msg.DelegatorAddress); err != nil {
 		return sdkerrors.ErrInvalidAddress.Wrapf("invalid delegator address: %s", err)
 	}
-	if _, err := sdk.ValAddressFromBech32(msg.ValidatorAddress); err != nil {
-		return sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
-	}
+	//if _, err := sdk.ValAddressFromBech32(msg.ValidatorAddress); err != nil {
+	//	return sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
+	//}
 
 	if !msg.Amount.IsValid() || !msg.Amount.Amount.IsPositive() {
 		return sdkerrors.Wrap(
