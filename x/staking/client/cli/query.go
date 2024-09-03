@@ -244,20 +244,21 @@ $ %s query staking redelegations-from %s1gghjut3ccd8ay0zduzj64hwre2fxs9ldmqhffj
 // GetCmdQueryDelegation the query delegation command.
 func GetCmdQueryDelegation() *cobra.Command {
 	bech32PrefixAccAddr := sdk.GetConfig().GetBech32AccountAddrPrefix()
+	bech32PrefixValAddr := sdk.GetConfig().GetBech32ValidatorAddrPrefix()
 
 	cmd := &cobra.Command{
-		Use:   "delegation [delegator-addr]",
+		Use:   "delegation [delegator-addr] [validator-addr]",
 		Short: "Query a delegation based on address and validator address",
 		Long: strings.TrimSpace(
 			fmt.Sprintf(`Query delegations for an individual delegator on an individual validator.
 
 Example:
-$ %s query staking delegation %s1gghjut3ccd8ay0zduzj64hwre2fxs9ld75ru9p
+$ %s query staking delegation %s1gghjut3ccd8ay0zduzj64hwre2fxs9ld75ru9p %s1gghjut3ccd8ay0zduzj64hwre2fxs9ldmqhffj
 `,
-				version.AppName, bech32PrefixAccAddr,
+				version.AppName, bech32PrefixAccAddr, bech32PrefixValAddr,
 			),
 		),
-		Args: cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientCtx, err := client.GetClientQueryContext(cmd)
 			if err != nil {
@@ -270,8 +271,14 @@ $ %s query staking delegation %s1gghjut3ccd8ay0zduzj64hwre2fxs9ld75ru9p
 				return err
 			}
 
+			valAddr, err := sdk.ValAddressFromBech32(args[1])
+			if err != nil {
+				return err
+			}
+
 			params := &types.QueryDelegationRequest{
 				DelegatorAddr: delAddr.String(),
+				ValidatorAddr: valAddr.String(),
 			}
 
 			res, err := queryClient.Delegation(cmd.Context(), params)
