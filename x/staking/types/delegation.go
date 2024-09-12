@@ -35,6 +35,10 @@ func NewDelegation(delegatorAddr sdk.AccAddress, validatorAddr sdk.ValAddress, s
 		DelegatorAddress: delegatorAddr.String(),
 		ValidatorAddress: validatorAddr.String(),
 		Shares:           shares,
+		StartHeight:      0,
+		Amount:           sdk.ZeroInt(),
+		Unmovable:        sdk.ZeroInt(),
+		UnMeidAmount:     sdk.ZeroInt(),
 	}
 }
 
