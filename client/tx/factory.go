@@ -392,7 +392,7 @@ func (f Factory) PrintUnsignedTx(clientCtx client.Context, msgs ...sdk.Msg) erro
 		}
 
 		f = f.WithGas(adjusted)
-		_, _ = fmt.Fprintf(os.Stderr, "%s\n", GasEstimateResponse{GasEstimate: f.Gas()})
+		_, _ = fmt.Fprintf(os.Stdout, "%s\n", GasEstimateResponse{GasEstimate: f.Gas()})
 	}
 
 	unsignedTx, err := f.BuildUnsignedTx(msgs...)
